@@ -10,7 +10,7 @@ export async function connectMongo() {
   if (!uri) {
     throw new Error('MONGODB_URI is not set in environment variables. Please check your .env file.');
   }
-  
+
   try {
     await mongoose.connect(uri, {
       maxPoolSize: 10
@@ -27,4 +27,11 @@ export const jwtConfig = {
   accessTokenTtlSec: Number(process.env.JWT_ACCESS_TTL_SEC || 3600),
   refreshTokenTtlSec: Number(process.env.JWT_REFRESH_TTL_SEC || 1209600),
   secret: process.env.JWT_SECRET || 'change-me-in-env'
+};
+
+// JIRA SERVICE
+export const jiraConfig = {
+  baseUrl: process.env.JIRA_BASE_URL,
+  email: process.env.JIRA_EMAIL,
+  apiToken: process.env.JIRA_API_TOKEN
 };
