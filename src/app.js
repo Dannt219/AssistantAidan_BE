@@ -3,6 +3,7 @@ import cors from 'cors';
 import morgan from 'morgan';
 import { connectMongo } from './config/index.js';
 import authRouter from './routes/auth.js';
+import generationsRouter from './routes/generations.js';
 import { logger } from './utils/logger.js';
 import e from 'express';
 
@@ -37,6 +38,7 @@ connectMongo().catch(err => {
 
 // Routes
 app.use('/auth', authRouter);
+app.use('/generations', generationsRouter);
 
 //Log regitered routes
 logger.info('Registered Routes:');
