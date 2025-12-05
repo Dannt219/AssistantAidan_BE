@@ -16,7 +16,7 @@ export function getJiraService() {
     return jiraService
 }
 
-router.post('/preflight', requireAuth, async (req, res, next) => {
+router.post('/prelight', requireAuth, async (req, res, next) => {
     const { issueKey } = req.body;
     if (!issueKey) {
         return res.status(400).json({ success: false, error: 'issueKey required' });
@@ -58,6 +58,17 @@ router.post('/preflight', requireAuth, async (req, res, next) => {
 
     // Estimate cost (gpt-4o-mini pricing: $0.15/1M input tokens, $0.60/1M output tokens)
     const estimatedCost = (estimatedTokens / 1000000) * 0.15 + (8000 / 1000000) * 0.60; // Assume ~8k output tokens
+
+    // return prelight data
+    return res.json({
+        isUiStory: true,
+        issueKey,
+        title: summary || 'N/A',
+        description,
+        attachments: attachments.length,
+        estimatedTokens,
+        estimatedCost: estimatedCost.toFixed(4)
+    })
 
     // Check for existing generations with the same issueKey (case-insensitive)
     const normalizedIssueKey = issueKey.trim();
