@@ -1,7 +1,7 @@
 import dotenv from 'dotenv';
 dotenv.config();
 import OpenAI from 'openai';
-import { logger } from '../utils/logger';
+import { logger } from '../utils/logger.js';
 
 const MANUAL_PROMPT = `You are an expert manual QA Engineer. Generate comprehensive test cases from JIRA issue descriptions.
 
@@ -105,7 +105,7 @@ export default class OpenAIService {
 
                     const response = await this.client.chat.completions.create({
                         model: this.model,
-                        message,
+                        messages: message,
                         max_completion_tokens: this.maxCompletionTokens,
                         temperature: 0.7
                     });

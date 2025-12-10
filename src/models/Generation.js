@@ -77,7 +77,7 @@ const generationSchema = new mongoose.Schema({
   published: { type: Boolean, default: false, index: true },
   publishedAt: { type: Date },
   publishedBy: { type: String },
-  version: [versionSchema],
+  versions: [versionSchema],
   currentVersion: { type: Number, default: 1 }
 }, { timestamps: true })
 
