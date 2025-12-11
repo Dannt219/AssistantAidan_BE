@@ -105,7 +105,7 @@ router.post('/testcases', requireAuth, async (req, res, next) => {
         }
 
         // Extract project key and find/create project
-        const projectKey = extractProjectKey(issueKey);
+        const projectKey = extractProject(issueKey);
         let project = null;
 
         if (projectKey) {
@@ -193,7 +193,7 @@ ${acceptanceCriteria ? `Acceptance Criteria:\n${acceptanceCriteria}` : ''}`;
         let cost = null;
 
         try {
-            const openai = getOpenAIService();
+            const openai = getOpenAiService();
             const openaiImages = [];
 
             logger.info(`Generating test cases with OpenAI (mode: ${autoMode ? 'auto' : 'manual'})`);
@@ -242,6 +242,16 @@ ${acceptanceCriteria ? `Acceptance Criteria:\n${acceptanceCriteria}` : ''}`;
         await generation.save();
 
         // Return success response
+        logger.info({
+            success: true,
+            data: {
+                generationId: String(generation._id),
+                issueKey,
+                markdown: generation.result.markdown,
+                generationTimeSeconds: generation.generationTimeSeconds,
+                cost: generation.cost
+            }
+        })
         return res.json({
             success: true,
             data: {

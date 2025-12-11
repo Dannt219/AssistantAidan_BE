@@ -23,7 +23,7 @@ export async function findOrCreateProject(projectKey, userEmail) {
     if (!project) {
         project = new Project({
             projectKey: normalizedkey,
-            createdAt: userEmail,
+            createdBy: userEmail,
             firstGeneratedAt: new Date(),
             lastGeneratedAt: new Date(),
             totalGenerations: 0

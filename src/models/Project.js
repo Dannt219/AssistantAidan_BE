@@ -4,9 +4,9 @@ import mongoose from "mongoose";
 const projectSchema = new mongoose.Schema({
     projectKey: {
         type: String,
-        require: true,
+        required: true,
         unique: true,
-        upercase: true,
+        uppercase: true,
         index: true
     },
     name: {
@@ -20,7 +20,7 @@ const projectSchema = new mongoose.Schema({
     firstGeneratedAt: { type: Date },
     lastGeneratedAt: { type: Date },
     totalGenerations: { type: Number, default: 0 },
-    createdby: { type: String }
+    createdBy: { type: String }
 }, { timestamps: true });
 
 export default mongoose.model('Project', projectSchema)

@@ -51,13 +51,13 @@ Main schema - generation schema
 const generationSchema = new mongoose.Schema({
   issueKey: { type: String, index: true },
   email: { type: String, index: true },
-  preject: {
+  project: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Project',
     index: true
   },
   mode: { type: String, enum: ['manual', 'auto'] },
-  status: { type: String, enum: ['completed', 'failed'] },
+  status: { type: String, enum: ['pending', 'running', 'completed', 'failed'] },
   createdAt: { type: Date, default: Date.now },
   startedAt: { type: Date },
   completedAt: { type: Date },

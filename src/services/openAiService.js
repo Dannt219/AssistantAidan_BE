@@ -75,7 +75,7 @@ export default class OpenAIService {
         this.maxCompletionTokens = 8000;
         this.maxRetries = 3;
     }
-    async generateTestCase(context, issueKey, autoMode = false, images = []) {
+    async generateTestCases(context, issueKey, autoMode = false, images = []) {
         try {
             const systemPrompt = autoMode ? AUTO_PROMPT : MANUAL_PROMPT;
 
