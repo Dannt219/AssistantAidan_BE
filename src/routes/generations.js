@@ -267,5 +267,114 @@ ${acceptanceCriteria ? `Acceptance Criteria:\n${acceptanceCriteria}` : ''}`;
     }
 });
 
+router.get('/:id/view', requireAuth, async (req, res, next) => {
+    try {
+        const gen = await Generation.findById(req.params.id)
+        if (!gen) {
+            return res.status(404).json({ success: false, error: 'Not found' });
+        }
+
+        const isOwner = gen.email === req.user.email;
+        const isPublisAndCompleted = gen.published && gen.status === 'completed';
+
+        if (!isOwner && !isPublisAndCompleted) {
+            return res.status(404).json({ success: false, error: 'Not found' });
+        }
+
+        if (gen.status !== 'completed') {
+            return res.status(400).json({ success: false, error: 'Generation not completed yet' });
+        }
+
+        const latestVersion = gen.versions && gen.versions.length > 0
+            ? gen.versions[gen.versions.length - 1]
+            : null;
+        const projectKey = gen.issueKey ? extractProject(gen.issueKey) : null;
+        return res.json({
+            success: true,
+            data: {
+                email: gen.email,
+                content: gen.result?.markdown?.content || '',
+                filename: gen.result?.markdown?.filename || 'output.md',
+                format: 'markdown',
+                issueKey: gen.issueKey,
+                projectKey: projectKey,
+                updatedAt: gen.updatedAt,
+                published: gen.published || false,
+                publishedAt: gen.publishedAt,
+                publishedBy: gen.publishedBy,
+                currentVersion: gen.currentVersion || 1,
+                versions: gen.versions || [],
+                lastUpdatedBy: latestVersion?.updatedBy || gen.email,
+                lastUpdatedAt: latestVersion?.updatedAt || gen.updatedAt || gen.createdAt
+            }
+        });
+    } catch (e) {
+        next(e);
+    }
+});
+
+// Update generation content (only owner can update)
+router.put('/:id/content', requireAuth, async (req, res, next) => {
+    try {
+        const { content } = req.body;
+        if (typeof content !== 'string') {
+            return res.status(400).json({ success: false, error: 'content must be a string' });
+        }
+
+        const gen = await Generation.findById(req.params.id);
+        if (!gen || gen.email !== req.user.email) {
+            return res.status(404).json({ success: false, error: 'Not found' });
+        }
+
+        if (gen.status !== 'completed') {
+            return res.status(400).json({ success: false, error: 'Can only update completed generations' });
+        }
+
+        // Track version: save current content as a version before updating
+        const currentContent = gen.result?.markdown?.content || '';
+        if (currentContent && currentContent !== content) {
+            // Initialize versions array if needed
+            if (!gen.versions) gen.versions = [];
+
+            // Get the current version number (defaults to 1 if not set)
+            const currentVersionNum = gen.currentVersion || 1;
+
+            // Save the current content as a version (only if we haven't already saved this version)
+            const versionExists = gen.versions.some(v => v.version === currentVersionNum);
+            if (!versionExists) {
+                gen.versions.push({
+                    version: currentVersionNum,
+                    content: currentContent,
+                    updatedAt: new Date(),
+                    updatedBy: req.user.email
+                });
+                logger.info(`Saved version ${currentVersionNum} to versions array for generation ${req.params.id}`);
+            }
+
+            // Increment version for the new content
+            gen.currentVersion = currentVersionNum + 1;
+
+            logger.info(`Updating generation ${req.params.id} to version ${gen.currentVersion}`);
+        }
+
+        // Update the markdown content
+        if (!gen.result) gen.result = {};
+        if (!gen.result.markdown) gen.result.markdown = {};
+        gen.result.markdown.content = content;
+
+        await gen.save();
+
+        return res.json({
+            success: true,
+            data: {
+                content: gen.result.markdown.content,
+                currentVersion: gen.currentVersion || 1
+            }
+        });
+    } catch (e) {
+        next(e);
+    }
+});
+
 export default router;
 
