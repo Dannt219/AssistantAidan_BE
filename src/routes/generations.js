@@ -5,6 +5,7 @@ import { logger } from "../utils/logger.js";
 import OpenAIService from "../services/openAiService.js";
 import Generation from '../models/Generation.js'
 import { extractProject, findOrCreateProject } from '../utils/projectUtils.js'
+import { generateExcelBuffer } from '../services/excelService.js';
 
 const router = Router();
 let jiraService = null;
@@ -369,6 +370,214 @@ router.put('/:id/content', requireAuth, async (req, res, next) => {
             data: {
                 content: gen.result.markdown.content,
                 currentVersion: gen.currentVersion || 1
+            }
+        });
+    } catch (e) {
+        next(e);
+    }
+});
+
+// Publish/Unpublish generation
+router.put('/:id/publish', requireAuth, async (req, res, next) => {
+    try {
+        const { published } = req.body;
+        if (typeof published !== 'boolean') {
+            return res.status(400).json({ success: false, error: 'published must be a boolean' });
+        }
+
+        const gen = await Generation.findById(req.params.id);
+        if (!gen || gen.email !== req.user.email) {
+            return res.status(404).json({ success: false, error: 'Not found' });
+        }
+
+        if (gen.status !== 'completed') {
+            return res.status(400).json({ success: false, error: 'Can only publish completed generations' });
+        }
+
+        gen.published = published;
+        if (published) {
+            gen.publishedAt = new Date();
+            gen.publishedBy = req.user.email;
+            logger.info(`Generation ${req.params.id} published by ${req.user.email}`);
+        } else {
+            gen.publishedAt = undefined;
+            gen.publishedBy = undefined;
+            logger.info(`Generation ${req.params.id} unpublished by ${req.user.email}`);
+        }
+
+        await gen.save();
+
+        return res.json({
+            success: true,
+            data: {
+                published: gen.published,
+                publishedAt: gen.publishedAt,
+                publishedBy: gen.publishedBy
+            }
+        });
+    } catch (e) {
+        next(e);
+    }
+});
+
+router.get('/:id/download', requireAuth, async (req, res, next) => {
+    try {
+        const gen = await Generation.findById(req.params.id);
+        if (!gen) {
+            return res.status(404).json({ success: false, error: 'Not found' });
+        }
+
+        const isOwner = gen.email === req.user.email;
+        const isPublishedAndCompleted = gen.published && gen.status === 'completed';
+
+        if (!isOwner && !isPublishedAndCompleted) {
+            return res.status(404).json({ success: false, error: 'Not found' });
+        }
+
+        if (gen.status !== 'completed') {
+            return res.status(400).json({ success: false, error: 'Not completed' });
+        }
+
+        const format = typeof req.query.format === 'string'
+            ? req.query.format
+            : 'md';
+
+        const FORMAT_CONFIG = {
+            md: {
+                mime: 'text/markdown',
+                ext: 'md'
+            },
+            pdf: {
+                mime: 'application/pdf',
+                ext: 'pdf'
+            },
+            xlsx: {
+                mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                ext: 'xlsx'
+            }
+        };
+
+        const config = FORMAT_CONFIG[format];
+        if (!config) {
+            return res.status(400).json({ success: false, error: 'Unsupported format' });
+        }
+
+        let buffer;
+        let filename = `output.${config.ext}`;
+
+        if (format === 'md') {
+            buffer = Buffer.from(gen.result?.markdown?.content || '', 'utf-8');
+            filename = gen.result?.markdown?.filename || filename;
+        }
+
+        if (format === 'xlsx') {
+            buffer = await generateExcelBuffer(gen);
+        }
+
+        if (format === 'pdf') {
+            buffer = gen.result?.pdf?.buffer; // hoặc generatePdfBuffer(gen)
+        }
+
+        if (!buffer) {
+            return res.status(404).json({
+                success: false,
+                error: `File "${format}" not generated`
+            });
+        }
+
+        res.setHeader('Content-Type', config.mime);
+        res.setHeader(
+            'Content-Disposition',
+            `attachment; filename="${filename}"`
+        );
+
+        return res.send(buffer);
+    } catch (e) {
+        console.error('DOWNLOAD ERROR:', e);
+        next(e);
+    }
+});
+
+// Delete generation (only owner can delete)
+router.delete('/:id', requireAuth, async (req, res, next) => {
+    try {
+        const gen = await Generation.findById(req.params.id);
+        if (!gen) {
+            return res.status(404).json({ success: false, error: 'Generation not found' });
+        }
+
+        // Only the owner can delete their generation
+        if (gen.email !== req.user.email) {
+            return res.status(403).json({ success: false, error: 'You can only delete your own generations' });
+        }
+
+        // Check if it's published - warn but allow deletion
+        if (gen.published) {
+            logger.warn(`User ${req.user.email} is deleting published generation ${req.params.id}`);
+        }
+
+        // Delete the generation
+        await Generation.findByIdAndDelete(req.params.id);
+
+        logger.info(`Generation ${req.params.id} deleted by ${req.user.email}`);
+        return res.json({ success: true, message: 'Generation deleted successfully' });
+    } catch (e) {
+        next(e);
+    }
+});
+
+// Get all generations (user's own + published ones) with pagination
+router.get('/', requireAuth, async (req, res, next) => {
+    try {
+        // Parse pagination parameters
+        const page = Math.max(1, parseInt(req.query.page || '1', 10));
+        const limit = Math.min(50, Math.max(1, parseInt(req.query.limit || '10', 10)));
+        const skip = (page - 1) * limit;
+
+        const filterType = req.query.filter || 'all';
+
+
+        // Filter: user's own OR published and completed
+        let filter = {};
+
+        if (filterType === 'mine') {
+            // Only user's own generations
+            filter = { email: req.user.email };
+        } else if (filterType === 'published') {
+            // Only published generations
+            filter = { published: true, status: 'completed' };
+        } else {
+            // Default: user's own OR published ones from all users
+            filter = {
+                $or: [
+                    { email: req.user.email },
+                    { published: true, status: 'completed' }
+                ]
+            };
+        }
+
+        // Fetch generations with pagination
+        const [generations, total] = await Promise.all([
+            Generation.find(filter)
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit),
+            Generation.countDocuments(filter)
+        ]);
+
+        // Calculate total pages
+        const pages = Math.ceil(total / limit);
+
+        return res.json({
+            success: true,
+            data: {
+                generations,
+                pagination: {
+                    page,
+                    limit,
+                    total,
+                    pages
+                }
             }
         });
     } catch (e) {
