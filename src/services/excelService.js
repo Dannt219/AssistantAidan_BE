@@ -11,18 +11,22 @@ function cleanMarkdown(text = '') {
         .trim();
 }
 
-function extractSection(text, start, end) {
-    const pattern = end
-        ? new RegExp(`${start}:([\\s\\S]*?)${end}:`, 'i')
-        : new RegExp(`${start}:([\\s\\S]*)`, 'i');
-
+function extractSection(text, heading) {
+    const pattern = new RegExp(
+        `##\\s*${heading}[\\s\\S]*?(?=\\n##\\s|$)`,
+        'i'
+    );
     const match = text.match(pattern);
-    return match ? match[1].trim() : '';
+    if (!match) return '';
+
+    return match[0]
+        .replace(new RegExp(`##\\s*${heading}`, 'i'), '')
+        .trim();
 }
 
 function parseTestCases(markdown) {
     const cases = [];
-    const blocks = markdown.split(/Test Case \d+:/).slice(1);
+    const blocks = markdown.split(/Test Case \d+/).slice(1);
 
     blocks.forEach((block, index) => {
         const rawTitle = block.split('\n')[0].trim();
@@ -30,10 +34,10 @@ function parseTestCases(markdown) {
         cases.push({
             id: `Test Case ${index + 1}`,
             title: cleanMarkdown(rawTitle),
-            priority: cleanMarkdown(extractSection(block, 'Priority', 'Preconditions')),
-            preconditions: cleanMarkdown(extractSection(block, 'Preconditions', 'Steps')),
-            steps: cleanMarkdown(extractSection(block, 'Steps', 'Expected Results')),
-            expected: cleanMarkdown(extractSection(block, 'Expected Results'))
+            priority: cleanMarkdown(extractSection(block, 'Priority')),
+            preconditions: cleanMarkdown(extractSection(block, 'Preconditions')),
+            steps: cleanMarkdown(extractSection(block, 'Steps')),
+            expected: cleanMarkdown(extractSection(block, 'Expected Results')),
         });
     });
 
