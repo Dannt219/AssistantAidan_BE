@@ -33,6 +33,21 @@ const pdfAttachmentSchema = new mongoose.Schema({
   _id: false
 });
 
+// Image schema for uploaded images
+const imageSchema = new mongoose.Schema({
+  originalName: { type: String, required: true },
+  filename: { type: String, required: true },
+  filepath: { type: String, required: true },
+  mimetype: { type: String, required: true },
+  size: { type: Number, required: true },
+  originalSize: { type: Number, required: true },
+  width: { type: Number },
+  height: { type: Number },
+  uploadedAt: { type: Date, default: Date.now }
+}, {
+  _id: false
+});
+
 // version schema
 const versionSchema = new mongoose.Schema({
   version: { type: Number, require: true },
@@ -71,6 +86,7 @@ const generationSchema = new mongoose.Schema({
   result: {
     markdown: { type: markdownSchema }
   },
+  images: [imageSchema],
   jiraTickets: [jiraTicketSchema],
   pdfAttachments: [pdfAttachmentSchema],
   error: { type: String },

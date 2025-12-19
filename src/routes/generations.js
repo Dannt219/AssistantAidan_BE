@@ -1,11 +1,14 @@
 import { Router } from "express";
 import JiraService from '../services/jiraService.js'
 import { requireAuth } from "../middleware/auth.js";
+import { uploadImages, processImages, cleanupOldImages } from "../middleware/upload.js";
 import { logger } from "../utils/logger.js";
 import OpenAIService from "../services/openAiService.js";
 import Generation from '../models/Generation.js'
 import { extractProject, findOrCreateProject } from '../utils/projectUtils.js'
 import { generateExcelBuffer } from '../services/excelService.js';
+import fs from 'fs';
+import path from 'path';
 
 const router = Router();
 let jiraService = null;
@@ -70,10 +73,19 @@ router.post('/prelight', requireAuth, async (req, res, next) => {
     // Estimate tokens (rough approximation: 1 token ≈ 4 characters)
     const contextText = `${summary} ${description}`;
     const contextLength = contextText.length;
-    const estimatedTokens = Math.ceil(contextLength / 4) + (imageAttachments.length * 200); // ~200 tokens per image
+    const baseTokens = Math.ceil(contextLength / 4);
+    const imageTokens = imageAttachments.length * 1000; // ~1000 tokens per image for vision model
+    const estimatedTokens = baseTokens + imageTokens;
 
-    // Estimate cost (gpt-4o-mini pricing: $0.15/1M input tokens, $0.60/1M output tokens)
-    const estimatedCost = (estimatedTokens / 1000000) * 0.15 + (8000 / 1000000) * 0.60; // Assume ~8k output tokens
+    // Estimate cost - use vision model pricing if images are present
+    let estimatedCost;
+    if (imageAttachments.length > 0) {
+        // gpt-4o pricing: $2.50/1M input tokens, $10.00/1M output tokens
+        estimatedCost = (estimatedTokens / 1000000) * 2.50 + (8000 / 1000000) * 10.00;
+    } else {
+        // gpt-4o-mini pricing: $0.15/1M input tokens, $0.60/1M output tokens
+        estimatedCost = (estimatedTokens / 1000000) * 0.15 + (8000 / 1000000) * 0.60;
+    }
 
     // return prelight data
     return res.json({
@@ -98,11 +110,19 @@ router.post('/prelight', requireAuth, async (req, res, next) => {
     // }).sort({ createdAt: -1 }); // Get the most recent one
 })
 
-router.post('/testcases', requireAuth, async (req, res, next) => {
+
+
+router.post('/testcases', requireAuth, uploadImages, processImages, async (req, res, next) => {
     try {
         const { issueKey, async: isAsync = false, autoMode = false } = req.body || {};
         if (!issueKey) {
             return res.status(400).json({ success: false, error: 'issueKey required' });
+        }
+
+        // Use uploaded images directly
+        const uploadedImages = req.processedImages || [];
+        if (uploadedImages.length > 0) {
+            logger.info(`Using ${uploadedImages.length} uploaded images for generation`);
         }
 
         // Extract project key and find/create project
@@ -125,7 +145,8 @@ router.post('/testcases', requireAuth, async (req, res, next) => {
             project: project ? project._id : undefined,
             mode: autoMode ? 'auto' : 'manual',
             status: isAsync ? 'queued' : 'running',
-            startedAt: isAsync ? undefined : new Date()
+            startedAt: isAsync ? undefined : new Date(),
+            images: uploadedImages || []
         });
         await generation.save();
 
@@ -195,10 +216,9 @@ ${acceptanceCriteria ? `Acceptance Criteria:\n${acceptanceCriteria}` : ''}`;
 
         try {
             const openai = getOpenAiService();
-            const openaiImages = [];
 
-            logger.info(`Generating test cases with OpenAI (mode: ${autoMode ? 'auto' : 'manual'})`);
-            const result = await openai.generateTestCases(context, issueKey, autoMode, openaiImages);
+            logger.info(`Generating test cases with OpenAI (mode: ${autoMode ? 'auto' : 'manual'}) with ${uploadedImages.length} image(s)`);
+            const result = await openai.generateTestCases(context, issueKey, autoMode, uploadedImages);
 
             // Handle response format
             if (typeof result === 'string') {
@@ -260,10 +280,24 @@ ${acceptanceCriteria ? `Acceptance Criteria:\n${acceptanceCriteria}` : ''}`;
                 issueKey,
                 markdown: generation.result.markdown,
                 generationTimeSeconds: generation.generationTimeSeconds,
-                cost: generation.cost
+                cost: generation.cost,
+                imagesUsed: uploadedImages ? uploadedImages.length : 0
             }
         });
     } catch (e) {
+        // Clean up uploaded images if generation failed
+        if (req.processedImages) {
+            req.processedImages.forEach(img => {
+                try {
+                    if (fs.existsSync(img.filepath)) {
+                        fs.unlinkSync(img.filepath);
+                        logger.info(`Cleaned up failed generation image: ${img.filename}`);
+                    }
+                } catch (cleanupError) {
+                    logger.warn(`Failed to cleanup image ${img.filename}: ${cleanupError.message}`);
+                }
+            });
+        }
         next(e);
     }
 });
@@ -306,7 +340,9 @@ router.get('/:id/view', requireAuth, async (req, res, next) => {
                 currentVersion: gen.currentVersion || 1,
                 versions: gen.versions || [],
                 lastUpdatedBy: latestVersion?.updatedBy || gen.email,
-                lastUpdatedAt: latestVersion?.updatedAt || gen.updatedAt || gen.createdAt
+                lastUpdatedAt: latestVersion?.updatedAt || gen.updatedAt || gen.createdAt,
+                images: gen.images || [],
+                imagesCount: gen.images ? gen.images.length : 0
             }
         });
     } catch (e) {
@@ -582,6 +618,53 @@ router.get('/', requireAuth, async (req, res, next) => {
         });
     } catch (e) {
         next(e);
+    }
+});
+
+// Serve uploaded images
+router.get('/images/:filename', requireAuth, async (req, res, next) => {
+    try {
+        const { filename } = req.params;
+        
+        // Security: validate filename to prevent directory traversal
+        if (!filename || filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+            return res.status(400).json({ success: false, error: 'Invalid filename' });
+        }
+
+        const imagePath = path.join(path.dirname(path.dirname(__dirname)), 'uploads', filename);
+        
+        // Check if file exists
+        if (!fs.existsSync(imagePath)) {
+            return res.status(404).json({ success: false, error: 'Image not found' });
+        }
+
+        // Set appropriate headers
+        res.setHeader('Content-Type', 'image/jpeg');
+        res.setHeader('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
+        
+        // Stream the file
+        const fileStream = fs.createReadStream(imagePath);
+        fileStream.pipe(res);
+    } catch (error) {
+        logger.error('Image serving error:', error);
+        next(error);
+    }
+});
+
+// Cleanup old images periodically (can be called manually or via cron)
+router.post('/cleanup-images', requireAuth, async (req, res, next) => {
+    try {
+        // Only allow admin users or add proper authorization
+        const maxAgeHours = parseInt(req.body.maxAgeHours) || 24;
+        cleanupOldImages(maxAgeHours);
+        
+        return res.json({
+            success: true,
+            message: `Cleaned up images older than ${maxAgeHours} hours`
+        });
+    } catch (error) {
+        logger.error('Cleanup error:', error);
+        next(error);
     }
 });
 

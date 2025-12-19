@@ -2,10 +2,19 @@ import dotenv from 'dotenv';
 dotenv.config();
 import OpenAI from 'openai';
 import { logger } from '../utils/logger.js';
+import fs from 'fs';
+import path from 'path';
 
 const MANUAL_PROMPT = `You are an expert manual QA Engineer. Generate comprehensive test cases from JIRA issue descriptions.
 
 **Context:** You will receive JIRA issue details including title, description, comments, and acceptance criteria. Use ONLY this information - never invent requirements.
+
+**Image Analysis:** If images are provided, analyze them carefully to understand:
+- UI layouts, wireframes, mockups, or screenshots
+- User interface elements (buttons, forms, navigation)
+- Visual design requirements and specifications
+- User workflows and interaction patterns
+- Error states or validation messages shown
 
 **Output Requirements:**
 1. Use proper markdown with ## for main headings and - for bullet points
@@ -17,11 +26,12 @@ const MANUAL_PROMPT = `You are an expert manual QA Engineer. Generate comprehens
    - Cover specific acceptance criteria
    - Include preconditions, steps, and expected results
    - Prioritized (High/Medium/Low)
+   - Reference visual elements from images when applicable
 
 **Must NOT:**
 - Never mention specific individual names
 - Never include implementation details (HTML classes, functions)
-- Never invent requirements not in the JIRA issue
+- Never invent requirements not in the JIRA issue or images
 
 **Coverage:**
 - Positive and negative test cases
@@ -31,12 +41,20 @@ const MANUAL_PROMPT = `You are an expert manual QA Engineer. Generate comprehens
 - Form validations
 - State transitions
 - Accessibility considerations (if UI-related)
+- Visual validation based on provided images
 
 Generate comprehensive test cases now.`;
 
 const AUTO_PROMPT = `You are an expert QA automation specialist. Generate automation-friendly test cases from JIRA issue descriptions.
 
 **Context:** You will receive JIRA issue details. Use ONLY this information - never invent requirements.
+
+**Image Analysis:** If images are provided, analyze them to identify:
+- Specific UI elements that can be automated (buttons, inputs, selectors)
+- Element hierarchies and relationships
+- Data validation requirements shown in mockups
+- User interaction flows and navigation paths
+- Expected states and transitions
 
 **Output Requirements:**
 1. Use proper markdown format
@@ -45,9 +63,10 @@ const AUTO_PROMPT = `You are an expert QA automation specialist. Generate automa
 4. Include blank lines before and after lists
 5. Each test should specify:
    - Clear, automatable steps
-   - Specific UI elements or data to verify
+   - Specific UI elements or data to verify (based on images when available)
    - Assertion points
    - Test data requirements
+   - Element identification strategies
 
 **Must NOT:**
 - Never include subjective validations
@@ -56,11 +75,12 @@ const AUTO_PROMPT = `You are an expert QA automation specialist. Generate automa
 
 **Focus on:**
 - Idempotent, independent test scenarios
-- Clear element identification strategies
+- Clear element identification strategies based on visual analysis
 - Repeatable test data
 - Programmatically verifiable assertions
 - Error handling in automation
 - State management
+- Visual regression testing when images show UI states
 
 Generate automation-friendly test cases now.`;
 
@@ -72,15 +92,37 @@ export default class OpenAIService {
         }
         this.client = new OpenAI({ apiKey });
         this.model = process.env.OPENAI_MODEL || 'gpt-4o-mini'
+        this.visionModel = process.env.OPENAI_VISION_MODEL || 'gpt-4o'
         this.maxCompletionTokens = 8000;
         this.maxRetries = 3;
+    }
+
+    // Helper method to convert image to base64
+    imageToBase64(imagePath) {
+        try {
+            const imageBuffer = fs.readFileSync(imagePath);
+            const base64Image = imageBuffer.toString('base64');
+            const ext = path.extname(imagePath).toLowerCase();
+            const mimeType = ext === '.png' ? 'image/png' : 'image/jpeg';
+            return `data:${mimeType};base64,${base64Image}`;
+        } catch (error) {
+            logger.error(`Failed to convert image to base64: ${error.message}`);
+            throw error;
+        }
     }
     async generateTestCases(context, issueKey, autoMode = false, images = []) {
         try {
             const systemPrompt = autoMode ? AUTO_PROMPT : MANUAL_PROMPT;
+            const hasImages = images && images.length > 0;
+            const modelToUse = hasImages ? this.visionModel : this.model;
 
             // Build user message content
-            const issueContext = `\n\nJIRA issue: ${issueKey} \n\n${context}`;
+            let issueContext = `\n\nJIRA issue: ${issueKey} \n\n${context}`;
+            
+            if (hasImages) {
+                issueContext += `\n\nImages provided: ${images.length} image(s) for analysis.`;
+            }
+
             const message = [
                 {
                     role: 'system',
@@ -90,8 +132,38 @@ export default class OpenAIService {
 
             let userMessage = {
                 role: 'user',
-                content: issueContext
+                content: []
             };
+
+            // Add text content
+            userMessage.content.push({
+                type: 'text',
+                text: issueContext
+            });
+
+            // Add images if provided
+            if (hasImages) {
+                for (const image of images) {
+                    try {
+                        const base64Image = this.imageToBase64(image.filepath);
+                        userMessage.content.push({
+                            type: 'image_url',
+                            image_url: {
+                                url: base64Image,
+                                detail: 'high' // Use high detail for better analysis
+                            }
+                        });
+                        logger.info(`Added image to OpenAI request: ${image.originalName}`);
+                    } catch (error) {
+                        logger.warn(`Failed to process image ${image.originalName}: ${error.message}`);
+                    }
+                }
+            }
+
+            // If no images, use simple text content
+            if (!hasImages) {
+                userMessage.content = issueContext;
+            }
 
             message.push(userMessage);
 
@@ -101,10 +173,10 @@ export default class OpenAIService {
 
             while (retryCount < this.maxRetries) {
                 try {
-                    logger.info(`Calling Open AI (attemp ${retryCount + 1}/${this.maxRetries})`);
+                    logger.info(`Calling OpenAI (attempt ${retryCount + 1}/${this.maxRetries}) with model: ${modelToUse}${hasImages ? ` and ${images.length} image(s)` : ''}`);
 
                     const response = await this.client.chat.completions.create({
-                        model: this.model,
+                        model: modelToUse,
                         messages: message,
                         max_completion_tokens: this.maxCompletionTokens,
                         temperature: 0.7
@@ -125,8 +197,18 @@ export default class OpenAIService {
                     }
 
                     // Calculate cost based on model pricing
-                    const inputCost = (tokenUsage.promptTokens / 1000000) * 0.15;
-                    const outputCost = (tokenUsage.completionTokens / 1000000) * 0.6;
+                    let inputCost, outputCost;
+                    
+                    if (modelToUse === this.visionModel) {
+                        // gpt-4o pricing: $2.50/1M input tokens, $10.00/1M output tokens
+                        inputCost = (tokenUsage.promptTokens / 1000000) * 2.50;
+                        outputCost = (tokenUsage.completionTokens / 1000000) * 10.00;
+                    } else {
+                        // gpt-4o-mini pricing: $0.15/1M input tokens, $0.60/1M output tokens
+                        inputCost = (tokenUsage.promptTokens / 1000000) * 0.15;
+                        outputCost = (tokenUsage.completionTokens / 1000000) * 0.60;
+                    }
+                    
                     const totalCost = inputCost + outputCost;
 
                     return {

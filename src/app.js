@@ -18,6 +18,9 @@ app.use(cors({
 // body parser - parse request body as JSON
 app.use(express.json({ limit: '10mb' }));
 
+// Serve uploaded images statically (optional, we also have the route-based approach)
+app.use('/uploads', express.static('uploads'));
+
 //HTTP request loging
 app.use(morgan('dev'));
 
