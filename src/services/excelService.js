@@ -3,6 +3,7 @@ import ExcelJS from 'exceljs';
 function cleanMarkdown(text = '') {
     return text
         .replace(/^#{1,6}\s*/gm, '')
+        .replace(/^\d+\.\s+/gm, '• ') // ✅ giữ step
         .replace(/\*\*(.*?)\*\*/g, '$1')
         .replace(/\*(.*?)\*/g, '$1')
         .replace(/^\s*[-*•]\s+/gm, '')
@@ -11,22 +12,19 @@ function cleanMarkdown(text = '') {
         .trim();
 }
 
-function extractSection(text, heading) {
+function extractSection(text, label) {
     const pattern = new RegExp(
-        `##\\s*${heading}[\\s\\S]*?(?=\\n##\\s|$)`,
+        `-\\s*\\*\\*${label}\\*\\*:\\s*([\\s\\S]*?)(?=\\n\\s*-\\s*\\*\\*|\\n###|$)`,
         'i'
     );
-    const match = text.match(pattern);
-    if (!match) return '';
 
-    return match[0]
-        .replace(new RegExp(`##\\s*${heading}`, 'i'), '')
-        .trim();
+    const match = text.match(pattern);
+    return match ? match[1].trim() : '';
 }
 
 function parseTestCases(markdown) {
     const cases = [];
-    const blocks = markdown.split(/Test Case \d+/).slice(1);
+    const blocks = markdown.split(/### Test Case \d+:/).slice(1);
 
     blocks.forEach((block, index) => {
         const rawTitle = block.split('\n')[0].trim();
@@ -37,7 +35,10 @@ function parseTestCases(markdown) {
             priority: cleanMarkdown(extractSection(block, 'Priority')),
             preconditions: cleanMarkdown(extractSection(block, 'Preconditions')),
             steps: cleanMarkdown(extractSection(block, 'Steps')),
-            expected: cleanMarkdown(extractSection(block, 'Expected Results')),
+            expected: cleanMarkdown(
+                extractSection(block, 'Expected Result') ||
+                extractSection(block, 'Expected Results')
+            )
         });
     });
 
