@@ -1,5 +1,6 @@
 {
   "name": "ntdsdet_test_assistant_be",
+  "type": "module",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
